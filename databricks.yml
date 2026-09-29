@@ -1,0 +1,20 @@
+bundle:
+  name: ecommerce_lakehouse
+
+include:
+  - resources/*.yml
+
+variables:
+  catalogo:
+    description: Catálogo Unity Catalog usado por todo o projeto
+    default: ecommerce_lakehouse
+  landing_path:
+    description: Caminho do volume de landing lido pelo Auto Loader
+    default: /Volumes/ecommerce_lakehouse/bronze/landing
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-401838c5-f7f4.cloud.databricks.com

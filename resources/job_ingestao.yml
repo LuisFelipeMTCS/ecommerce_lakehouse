@@ -1,0 +1,20 @@
+resources:
+  jobs:
+    ecommerce_lakehouse_ingestao:
+      name: ecommerce_lakehouse_ingestao
+      trigger:
+        pause_status: PAUSED
+        file_arrival:
+          url: ${var.landing_path}/
+          min_time_between_triggers_seconds: 300
+      tasks:
+        - task_key: pipeline_refresh
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.ecommerce_medallion_dlt.id}
+        - task_key: metricas_qualidade
+          depends_on:
+            - task_key: pipeline_refresh
+          notebook_task:
+            notebook_path: ../src/operacao/metricas_qualidade.sql
+            base_parameters:
+              catalogo: ${var.catalogo}

@@ -1,0 +1,81 @@
+resources:
+  jobs:
+    setup_e_carga:
+      name: ecommerce_lakehouse_setup_e_carga
+      tasks:
+        - task_key: setup_catalogo
+          notebook_task:
+            notebook_path: ../src/setup/setup_catalogo.sql
+            base_parameters:
+              catalogo: ${var.catalogo}
+
+        - task_key: governanca_unity_catalog
+          depends_on:
+            - task_key: setup_catalogo
+          notebook_task:
+            notebook_path: ../src/setup/governanca_unity_catalog.sql
+            base_parameters:
+              catalogo: ${var.catalogo}
+
+        - task_key: gerador_dados_lote1
+          depends_on:
+            - task_key: governanca_unity_catalog
+          notebook_task:
+            notebook_path: ../src/setup/gerador_dados.py
+            base_parameters:
+              landing_path: ${var.landing_path}
+              lote: "1"
+
+        - task_key: pipeline_refresh_lote1
+          depends_on:
+            - task_key: gerador_dados_lote1
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.ecommerce_medallion_dlt.id}
+
+        - task_key: gerador_dados_lote2
+          depends_on:
+            - task_key: pipeline_refresh_lote1
+          notebook_task:
+            notebook_path: ../src/setup/gerador_dados.py
+            base_parameters:
+              landing_path: ${var.landing_path}
+              lote: "2"
+
+        - task_key: pipeline_refresh_lote2
+          depends_on:
+            - task_key: gerador_dados_lote2
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.ecommerce_medallion_dlt.id}
+
+        - task_key: manutencao_delta
+          depends_on:
+            - task_key: pipeline_refresh_lote2
+          notebook_task:
+            notebook_path: ../src/operacao/manutencao_delta.sql
+            base_parameters:
+              catalogo: ${var.catalogo}
+
+        - task_key: metricas_qualidade
+          depends_on:
+            - task_key: manutencao_delta
+          notebook_task:
+            notebook_path: ../src/operacao/metricas_qualidade.sql
+            base_parameters:
+              catalogo: ${var.catalogo}
+
+        - task_key: demo_checkpoint_autoloader
+          depends_on:
+            - task_key: metricas_qualidade
+          notebook_task:
+            notebook_path: ../src/operacao/demo_checkpoint_autoloader.py
+            base_parameters:
+              catalogo: ${var.catalogo}
+              landing_path: ${var.landing_path}
+
+        - task_key: governanca_validacao
+          depends_on:
+            - task_key: demo_checkpoint_autoloader
+          notebook_task:
+            notebook_path: ../src/operacao/governanca_validacao.sql
+            base_parameters:
+              catalogo: ${var.catalogo}

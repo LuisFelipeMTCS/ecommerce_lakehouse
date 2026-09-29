@@ -1,0 +1,14 @@
+resources:
+  jobs:
+    ecommerce_lakehouse_manutencao:
+      name: ecommerce_lakehouse_manutencao
+      schedule:
+        pause_status: PAUSED
+        quartz_cron_expression: "0 30 2 * * ?"
+        timezone_id: America/Sao_Paulo
+      tasks:
+        - task_key: manutencao_delta
+          notebook_task:
+            notebook_path: ../src/operacao/manutencao_delta.sql
+            base_parameters:
+              catalogo: ${var.catalogo}

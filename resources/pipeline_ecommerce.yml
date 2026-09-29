@@ -1,0 +1,27 @@
+resources:
+  pipelines:
+    ecommerce_medallion_dlt:
+      name: ecommerce_medallion_dlt
+      serverless: true
+      catalog: ${var.catalogo}
+      schema: silver
+      channel: CURRENT
+      photon: true
+      continuous: false
+      development: true
+      libraries:
+        - file:
+            path: ../src/pipeline/bronze.sql
+        - file:
+            path: ../src/pipeline/silver.sql
+        - file:
+            path: ../src/pipeline/gold.sql
+      configuration:
+        catalogo: ${var.catalogo}
+        landing_path: ${var.landing_path}
+      notifications:
+        - email_recipients:
+            - luis.maio@al.infnet.edu.br
+          alerts:
+            - on-update-failure
+            - on-update-fatal-failure
