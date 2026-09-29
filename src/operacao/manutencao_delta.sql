@@ -34,9 +34,19 @@ DESCRIBE HISTORY silver.clientes;
 
 -- COMMAND ----------
 
-SELECT _change_type, count(*) AS qtd
-FROM table_changes('silver.pedidos', (SELECT max(version) - 1 FROM (DESCRIBE HISTORY silver.pedidos)))
-GROUP BY ALL;
+-- MAGIC %python
+-- MAGIC # table_changes exige uma versao literal (nao aceita subquery), entao calculamos aqui
+-- MAGIC versao_inicial = (
+-- MAGIC     spark.sql("DESCRIBE HISTORY silver.pedidos")
+-- MAGIC     .selectExpr("max(version) - 1 AS v")
+-- MAGIC     .collect()[0]["v"]
+-- MAGIC )
+-- MAGIC versao_inicial = max(int(versao_inicial or 0), 0)
+-- MAGIC display(spark.sql(f"""
+-- MAGIC     SELECT _change_type, count(*) AS qtd
+-- MAGIC     FROM table_changes('silver.pedidos', {versao_inicial})
+-- MAGIC     GROUP BY ALL
+-- MAGIC """))
 
 -- COMMAND ----------
 
@@ -102,10 +112,15 @@ SELECT count(*) AS linhas_apos_delete_acidental FROM auditoria.pedidos_snapshot;
 
 -- COMMAND ----------
 
-RESTORE TABLE auditoria.pedidos_snapshot TO VERSION AS OF (
-  SELECT max(version) FROM (DESCRIBE HISTORY auditoria.pedidos_snapshot)
-  WHERE operation != 'DELETE'
-);
+-- MAGIC %python
+-- MAGIC # RESTORE TO VERSION AS OF tambem exige uma versao literal, nao subquery
+-- MAGIC versao_antes_delete = (
+-- MAGIC     spark.sql("DESCRIBE HISTORY auditoria.pedidos_snapshot")
+-- MAGIC     .filter("operation != 'DELETE'")
+-- MAGIC     .selectExpr("max(version) AS v")
+-- MAGIC     .collect()[0]["v"]
+-- MAGIC )
+-- MAGIC spark.sql(f"RESTORE TABLE auditoria.pedidos_snapshot TO VERSION AS OF {versao_antes_delete}")
 
 -- COMMAND ----------
 

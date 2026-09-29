@@ -81,15 +81,15 @@ GROUP BY ALL;
 -- na view dinâmica `gold.vw_clientes_regional` (ver src/operacao/governanca_validacao.sql).
 
 CREATE MATERIALIZED VIEW gold.dim_clientes (
-  cliente_id      BIGINT,
-  nome            STRING,
-  email           STRING MASK governanca.mascara_email,
-  cpf             STRING MASK governanca.mascara_cpf,
-  telefone        STRING MASK governanca.mascara_telefone,
-  cidade          STRING,
-  uf              STRING,
-  data_nascimento DATE,
-  vigente_desde   TIMESTAMP
+  cliente_id           INT,
+  nome                 STRING,
+  email                STRING MASK ${catalogo}.governanca.mascara_email,
+  cpf                  STRING MASK ${catalogo}.governanca.mascara_cpf,
+  telefone             STRING MASK ${catalogo}.governanca.mascara_telefone,
+  cidade               STRING,
+  uf                   STRING,
+  data_nascimento      DATE,
+  vigente_desde_evento_seq BIGINT
 )
 COMMENT 'Dimensão vigente de clientes, com máscara de PII (row filter aplicado via gold.vw_clientes_regional)'
 CLUSTER BY (uf)
@@ -102,11 +102,18 @@ AS SELECT
   cidade,
   uf,
   data_nascimento,
-  __START_AT AS vigente_desde
+  __START_AT AS vigente_desde_evento_seq
 FROM silver.clientes
 WHERE __END_AT IS NULL;
 
 -- ## Pedidos por hora (streaming, com watermark)
+-- MAGIC
+-- Lê de `silver.pedidos_eventos_validos` (streaming table só de append, um evento por
+-- linha) em vez de `silver.pedidos` (alvo de MERGE via AUTO CDC): streaming não suporta
+-- ler updates de uma fonte que sofre MERGE (erro testado em produção:
+-- `DELTA_SOURCE_TABLE_IGNORE_CHANGES`). Como só nos interessa o evento de criação
+-- (status = 'CRIADO'), a tabela de eventos validados é a fonte correta e mantém a
+-- leitura 100% append-only.
 
 CREATE OR REFRESH STREAMING TABLE gold.pedidos_por_hora
 COMMENT 'Contagem de pedidos CRIADO por janela de 1 hora e canal, com watermark de 2 horas'
@@ -115,7 +122,7 @@ AS SELECT
   canal,
   count(*)                    AS qtd_pedidos,
   sum(quantidade * preco_unitario) AS receita_estimada
-FROM STREAM(silver.pedidos)
-WHERE status = 'CRIADO'
+FROM STREAM(silver.pedidos_eventos_validos)
 WATERMARK pedido_ts DELAY OF INTERVAL 2 HOURS
+WHERE status = 'CRIADO'
 GROUP BY window(pedido_ts, '1 hour'), canal;

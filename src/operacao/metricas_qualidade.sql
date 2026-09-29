@@ -29,14 +29,14 @@ SELECT * FROM event_log(TABLE(${catalogo}.silver.pedidos));
 
 CREATE OR REPLACE VIEW monitoramento.vw_qualidade_expectations AS
 SELECT
-  details:flow_progress.flow_name::STRING  AS dataset,
+  expectation.dataset::STRING              AS dataset,
   expectation.name::STRING                 AS regra,
   expectation.passed_records::BIGINT       AS aprovados,
   expectation.failed_records::BIGINT       AS reprovados,
   timestamp
-FROM monitoramento.vw_event_log,
-LATERAL explode(from_json(
-  to_json(details:flow_progress.data_quality.expectations),
+FROM monitoramento.vw_event_log
+LATERAL VIEW explode(from_json(
+  details:flow_progress.data_quality.expectations::STRING,
   'array<struct<name:string,dataset:string,passed_records:bigint,failed_records:bigint>>'
 )) AS expectation
 WHERE event_type = 'flow_progress'
@@ -68,7 +68,7 @@ ORDER BY qtd DESC;
 -- COMMAND ----------
 
 SELECT
-  details:flow_progress.flow_name::STRING AS flow_name,
+  origin.flow_name AS flow_name,
   sum(details:flow_progress.metrics.num_output_rows::BIGINT) AS linhas_processadas,
   sum(coalesce(details:flow_progress.data_quality.dropped_records::BIGINT, 0)) AS linhas_descartadas
 FROM monitoramento.vw_event_log
@@ -83,13 +83,13 @@ ORDER BY flow_name;
 -- COMMAND ----------
 
 SELECT
-  origin:update_id::STRING AS update_id,
+  origin.update_id         AS update_id,
   min(timestamp)           AS inicio,
   max(timestamp)           AS fim,
   cast(max(timestamp) AS DOUBLE) - cast(min(timestamp) AS DOUBLE) AS duracao_segundos
 FROM monitoramento.vw_event_log
 WHERE event_type = 'update_progress'
-GROUP BY origin:update_id::STRING
+GROUP BY origin.update_id
 ORDER BY inicio DESC;
 
 -- COMMAND ----------

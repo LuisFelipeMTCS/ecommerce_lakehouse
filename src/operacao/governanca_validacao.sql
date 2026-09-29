@@ -44,7 +44,7 @@ SELECT
   cidade,
   uf,
   data_nascimento,
-  vigente_desde
+  vigente_desde_evento_seq
 FROM gold.dim_clientes
 WHERE governanca.filtro_uf(uf);
 

@@ -1,0 +1,40 @@
+{
+  "_comentario": "Documento de referencia apenas. NAO e usado pelo databricks.yml e nao roda na Free Edition (que so permite computacao serverless). Mostra como o mesmo pipeline seria declarado com um cluster classico autoscale, para fins de comparacao no relatorio.",
+  "name": "ecommerce_medallion_dlt_classico",
+  "catalog": "ecommerce_lakehouse",
+  "schema": "silver",
+  "channel": "CURRENT",
+  "photon": true,
+  "continuous": false,
+  "development": true,
+  "clusters": [
+    {
+      "label": "default",
+      "autoscale": {
+        "min_workers": 1,
+        "max_workers": 5,
+        "mode": "ENHANCED"
+      },
+      "node_type_id": "i3.xlarge",
+      "driver_node_type_id": "i3.xlarge",
+      "custom_tags": {
+        "projeto": "ecommerce_lakehouse"
+      }
+    }
+  ],
+  "libraries": [
+    { "file": { "path": "../../src/pipeline/bronze.sql" } },
+    { "file": { "path": "../../src/pipeline/silver.sql" } },
+    { "file": { "path": "../../src/pipeline/gold.sql" } }
+  ],
+  "configuration": {
+    "catalogo": "ecommerce_lakehouse",
+    "landing_path": "/Volumes/ecommerce_lakehouse/bronze/landing"
+  },
+  "notifications": [
+    {
+      "email_recipients": ["luis.maio@al.infnet.edu.br"],
+      "alerts": ["on-update-failure", "on-update-fatal-failure"]
+    }
+  ]
+}
