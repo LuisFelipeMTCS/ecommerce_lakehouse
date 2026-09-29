@@ -1,5 +1,6 @@
 .databricks/
 .claude/
+.vscode/
 __pycache__/
 *.pyc
 .DS_Store
