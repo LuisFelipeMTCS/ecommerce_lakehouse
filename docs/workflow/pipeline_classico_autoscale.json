@@ -23,9 +23,9 @@
     }
   ],
   "libraries": [
-    { "file": { "path": "../../src/pipeline/bronze.sql" } },
-    { "file": { "path": "../../src/pipeline/silver.sql" } },
-    { "file": { "path": "../../src/pipeline/gold.sql" } }
+    { "file": { "path": "../../src/pipeline/bronze.py" } },
+    { "file": { "path": "../../src/pipeline/silver.py" } },
+    { "file": { "path": "../../src/pipeline/gold.py" } }
   ],
   "configuration": {
     "catalogo": "ecommerce_lakehouse",

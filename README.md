@@ -55,7 +55,7 @@ resources/
   job_manutencao.yml        # job agendado (cron, PAUSED) para manutenção noturna
 src/
   setup/                    # catálogo, governança, gerador de dados sintéticos
-  pipeline/                 # bronze.sql, silver.sql, gold.sql (libraries do pipeline)
+  pipeline/                 # bronze.py, silver.py, gold.py (libraries do pipeline)
   operacao/                 # manutenção Delta, métricas, checkpoint demo, validação
 docs/
   workflow/                 # JSONs de referência/documentais (não usados pelo bundle)
