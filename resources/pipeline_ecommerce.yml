@@ -11,11 +11,11 @@ resources:
       development: true
       libraries:
         - file:
-            path: ../src/pipeline/bronze.sql
+            path: ../src/pipeline/bronze.py
         - file:
-            path: ../src/pipeline/silver.sql
+            path: ../src/pipeline/silver.py
         - file:
-            path: ../src/pipeline/gold.sql
+            path: ../src/pipeline/gold.py
       configuration:
         catalogo: ${var.catalogo}
         landing_path: ${var.landing_path}
