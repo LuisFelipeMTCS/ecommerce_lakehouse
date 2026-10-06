@@ -1,71 +1,144 @@
-# Data Lakehouse E-commerce — Databricks Asset Bundle
+# E-commerce Data Lakehouse — Databricks, Delta Lake e Unity Catalog
 
-Projeto acadêmico de Data Lakehouse (arquitetura Medallion) construído inteiramente com
-**Lakeflow Declarative Pipelines** (DLT) em SQL, **Unity Catalog** (governança, máscara,
-row filter) e empacotado como **Databricks Asset Bundle**, rodando em computação
-**serverless** (Databricks Free Edition).
+Pipeline de dados de ponta a ponta para um cenário de e-commerce, no padrão **Medallion**
+(bronze → silver → gold), construído com **Lakeflow Declarative Pipelines** (antigo Delta Live
+Tables) em **SQL**, governado pelo **Unity Catalog** e empacotado como **Databricks Asset
+Bundle** (infraestrutura como código). Roda em computação **serverless** na Databricks Free
+Edition.
+
+**Stack:** Databricks · Delta Lake · Lakeflow Declarative Pipelines · Auto Loader · Unity Catalog ·
+Databricks Asset Bundles · SQL · Python
+
+![Grafo do pipeline no Databricks](docs/img/03a_pipeline_grafo_execucao.png)
+
+## O que o projeto demonstra
+
+| Tema | Como aparece no projeto |
+|---|---|
+| **Ingestão incremental** | Auto Loader (`STREAM read_files`) lê só os arquivos novos de um Volume do Unity Catalog; dados fora do schema vão para `_rescued_data` |
+| **Qualidade de dados** | Expectations em três severidades (avisar, descartar, falhar) e uma tabela de **quarentena** que guarda o pedido rejeitado com o motivo |
+| **Change Data Capture** | `AUTO CDC INTO` com **SCD Tipo 2** para clientes (histórico completo) e **SCD Tipo 1** para pedidos e produtos, incluindo deletes e eventos fora de ordem |
+| **Governança** | Grupos de conta, `GRANT` por camada, funções de **máscara** de PII (e-mail, CPF, telefone), tags e linhagem no Unity Catalog |
+| **Transações Delta** | Time travel, `RESTORE`, `MERGE`, deletion vectors e leitura do `_delta_log` via `DESCRIBE HISTORY` |
+| **Performance** | Z-Order, liquid clustering (`CLUSTER BY`), compactação automática, `OPTIMIZE` e `VACUUM` |
+| **Streaming** | Watermark e janelas em `gold.pedidos_por_hora`; checkpoint e `dropDuplicatesWithinWatermark` em um Auto Loader standalone |
+| **Observabilidade** | Métricas de qualidade e duração lidas do event log do pipeline |
+| **Automação** | 3 jobs (carga completa, ingestão por chegada de arquivo, manutenção agendada) e deploy reprodutível com um comando |
 
 ## Arquitetura
 
-```
-                 ┌──────────────┐
- gerador_dados → │   Volume     │  bronze.landing (JSON/CSV)
-                 │  (landing)   │
-                 └──────┬───────┘
-                        │ Auto Loader (STREAM read_files)
-                        ▼
-                 ┌──────────────┐
-                 │   BRONZE     │  streaming tables, schema fixo, _rescued_data
-                 └──────┬───────┘
-                        │ expectations + CDC (AUTO CDC INTO)
-                        ▼
-                 ┌──────────────┐
-                 │   SILVER     │  clientes (SCD2), pedidos (SCD1) + quarentena, produtos (SCD1)
-                 └──────┬───────┘
-                        │ + referencia.categorias (dependência externa)
-                        ▼
-                 ┌──────────────┐
-                 │    GOLD      │  MVs (liquid clustering), dim_clientes mascarada,
-                 └──────────────┘  streaming table com watermark
+```mermaid
+flowchart LR
+    G["gerador_dados.py<br/>(dados sintéticos)"] -->|JSON / CSV| L[("Volume<br/>bronze.landing")]
+    L -->|Auto Loader| B
+
+    subgraph B["BRONZE · streaming tables"]
+        direction TB
+        b1[clientes_raw]
+        b2[pedidos_raw]
+        b3[produtos_raw]
+    end
+
+    B -->|"expectations<br/>+ quarentena"| S
+
+    subgraph S["SILVER · AUTO CDC INTO"]
+        direction TB
+        s1["clientes · SCD2"]
+        s2["pedidos · SCD1"]
+        s3["produtos · SCD1"]
+        s4["pedidos_quarentena"]
+    end
+
+    R[("referencia.categorias<br/>dependência externa")] --> Go
+    S --> Go
+
+    subgraph Go["GOLD · materialized views"]
+        direction TB
+        g1[vendas_diarias_categoria]
+        g2[funil_status_pedidos]
+        g3[clientes_valor]
+        g4["dim_clientes · MASK"]
+        g5["pedidos_por_hora · watermark"]
+    end
+
+    UC{{"Unity Catalog<br/>grupos · GRANT · máscaras · linhagem"}} -.-> S
+    UC -.-> Go
 ```
 
-- **Bronze**: 3 streaming tables (`clientes_raw`, `pedidos_raw`, `produtos_raw`) via Auto
-  Loader (`STREAM read_files`), com `schemaHints`, coluna de rescued data e expectation WARN.
-- **Silver**: streaming tables de eventos validados (expectations `DROP ROW`/`FAIL UPDATE`) +
-  `CREATE FLOW ... AUTO CDC INTO` para `clientes` (SCD Type 2), `pedidos` (SCD Type 1, com
-  quarentena `pedidos_quarentena`) e `produtos` (SCD Type 1 com DELETE).
-- **Gold**: materialized views com `CLUSTER BY` (liquid clustering) para métricas de negócio,
-  `dim_clientes` com colunas `MASK`, e uma streaming table (`pedidos_por_hora`) com
-  `WATERMARK`.
-- **Governança (Unity Catalog)**: funções de máscara (e-mail, CPF, telefone) liberadas para
-  os grupos `ecom_engenharia`/`ecom_pii_leitores`; isolamento silver↔gold (analistas só leem
-  gold); grupos de conta `ecom_engenharia`, `ecom_analistas`, `ecom_pii_leitores`.
-- **Operação**: manutenção Delta (time travel, RESTORE, OPTIMIZE ZORDER, REORG, VACUUM),
-  métricas de qualidade a partir do event log do pipeline, demo de Auto Loader standalone com
-  watermark + `dropDuplicatesWithinWatermark`, e validação de governança.
+- **Bronze:** cópia fiel dos eventos, sem regra de negócio, com `arquivo_origem` e `data_ingestao`.
+- **Silver:** dados validados e com as mudanças aplicadas (SCD1/SCD2). Pedidos inválidos vão para `pedidos_quarentena`.
+- **Gold:** agregações de negócio com liquid clustering, uma dimensão com PII mascarada e uma
+  streaming table com watermark.
 
-## Estrutura do projeto
+## Resultados da execução
+
+Dois lotes de dados sintéticos (o segundo traz updates, deletes, mudanças de status e um evento
+de cliente fora de ordem). Contagens lidas diretamente do workspace:
+
+| Etapa | Resultado |
+|---|---|
+| Bronze | 571 eventos de clientes · 4.800 de pedidos · 46 de produtos |
+| Qualidade de pedidos | 4.800 recebidos = **4.646 válidos + 154 em quarentena** (nenhum pedido se perde) |
+| Qualidade de clientes | 17 de 571 eventos descartados (CPF ou e-mail inválido) |
+| Silver · clientes (SCD2) | 544 versões = **476 vigentes + 68 históricas** · 486 clientes distintos · 10 deletados |
+| Silver · pedidos (SCD1) | 3.873 pedidos, uma linha por pedido, com os status atualizados |
+| Silver · produtos (SCD1) | 39 produtos (1 removido por `DELETE`) |
+| Gold | 5 datasets de negócio · `dim_clientes` com 476 clientes |
+| Execução | Job completo em **11 min 15 s** (10 tarefas, 113 consultas) · cada atualização do pipeline em ~2 min |
+
+| Evolução de um cliente (SCD2) | Z-Order registrado no log Delta |
+|---|---|
+| ![SCD2](docs/img/06a_cdc_scd2_historico_clientes.png) | ![Z-Order](docs/img/09a_zorder_historico_optimize.png) |
+
+| Workflow principal | Linhagem no Unity Catalog |
+|---|---|
+| ![Job](docs/img/03d_job_principal_timeline.png) | ![Lineage](docs/img/07b_unity_catalog_lineage_dim_clientes.png) |
+
+## Governança e acesso
+
+| Grupo (de conta) | Acesso |
+|---|---|
+| `ecom_engenharia` | Leitura e escrita em bronze, silver e gold, e no Volume de landing; vê PII real |
+| `ecom_pii_leitores` | Leitura da gold com PII real |
+| `ecom_analistas` | Leitura da gold com PII **mascarada** |
+
+As funções `governanca.mascara_email`, `mascara_cpf` e `mascara_telefone` consultam
+`is_account_group_member(...)` e devolvem o valor real só para os dois primeiros grupos; os demais
+veem, por exemplo, `***@example.com`, `***.***.*20` e `****0917`. A silver e a bronze, que guardam a
+PII completa, não são concedidas a analistas.
+
+![Dimensão de clientes com PII mascarada](docs/img/08d_mascaras_efeito_consulta_dim_clientes.png)
+
+## Estrutura do repositório
 
 ```
-databricks.yml              # bundle, variables, targets — inclui resources/*.yml
+databricks.yml                   # bundle: variáveis, targets, includes
 resources/
-  pipeline_ecommerce.yml    # definição do pipeline Lakeflow
-  job_setup_e_carga.yml     # job principal (setup → dados → pipeline → operação)
-  job_ingestao.yml          # job disparado por file_arrival no volume de landing (PAUSED)
-  job_manutencao.yml        # job agendado (cron, PAUSED) para manutenção noturna
+  pipeline_ecommerce.yml         # pipeline Lakeflow (serverless)
+  job_setup_e_carga.yml          # job principal: setup → dados → pipeline → operação
+  job_ingestao.yml               # dispara por chegada de arquivo (file_arrival), pausado
+  job_manutencao.yml             # manutenção noturna por cron, pausado
 src/
-  setup/                    # catálogo, governança, gerador de dados sintéticos
-  pipeline/                 # bronze.sql, silver.sql, gold.sql (libraries do pipeline)
-  operacao/                 # manutenção Delta, métricas, checkpoint demo, validação
+  setup/                         # catálogo, governança, gerador de dados
+  pipeline/                      # bronze.sql · silver.sql · gold.sql
+  operacao/                      # manutenção Delta, métricas, checkpoint, validação
+teste/
+  validacao_rubricas.ipynb       # consultas de validação (uma por seção, com descrição)
 docs/
-  workflow/                 # JSONs de referência/documentais (não usados pelo bundle)
-EVIDENCIAS.md                # consultas de evidência coletadas após a execução
+  relatorio/                     # fonte HTML do relatório de arquitetura (PDF na raiz)
+  workflow/                      # config. de referência (cluster clássico com autoscale)
+  img/                           # imagens usadas neste README
+Relatorio_Arquitetura.pdf        # relatório de arquitetura (evidências, métricas, limitações)
 ```
 
-## Como rodar
+## Como executar
 
-Pré-requisitos: Databricks CLI ≥ 0.230 autenticada via OAuth (`databricks auth login`),
-Terraform disponível para o `databricks bundle` (veja nota abaixo).
+Pré-requisitos: Databricks CLI ≥ 0.230 autenticada (`databricks auth login`) e Terraform
+disponível para o `databricks bundle`.
+
+1. Crie os grupos `ecom_engenharia`, `ecom_analistas` e `ecom_pii_leitores` como **grupos de
+   conta** (*Settings › Identity and access › Groups*) e adicione seu usuário a `ecom_engenharia`.
+2. Valide, publique e execute:
 
 ```bash
 databricks bundle validate
@@ -73,58 +146,41 @@ databricks bundle deploy
 databricks bundle run setup_e_carga
 ```
 
-> **Nota sobre o Terraform da CLI**: neste ambiente, o download automático do Terraform pela
-> CLI falhou por uma chave GPG expirada do lado do HashiCorp. Contornei apontando
-> `DATABRICKS_TF_EXEC_PATH` para um binário do Terraform já presente localmente (instalado
-> junto com a extensão Databricks do VS Code). Se você encontrar o mesmo erro, aponte essa
-> variável de ambiente para qualquer binário `terraform` ≥ 1.5 disponível na máquina.
+3. Para conferir o resultado, importe `teste/validacao_rubricas.ipynb` (ou use o que o deploy já
+   enviou ao workspace) e execute as células.
 
-Os grupos `ecom_engenharia`, `ecom_analistas` e `ecom_pii_leitores` precisam existir como
-**grupos de conta** (não de workspace) antes do deploy — crie-os em *Settings > Identity
-and access > Groups* e adicione seu usuário a `ecom_engenharia`.
+> **Terraform:** se o download automático falhar com `openpgp: key expired`, aponte
+> `DATABRICKS_TF_EXEC_PATH` para um binário `terraform` ≥ 1.5 já instalado (a extensão Databricks
+> do VS Code traz um).
 
-## Decisões e adaptações feitas durante a implementação
+## Decisões e dificuldades técnicas
 
-Trabalho iterativo: a cada erro do `databricks bundle run`, o arquivo responsável foi
-corrigido, sem remover a intenção original do requisito. Principais adaptações:
+O pipeline foi executado de verdade no workspace, e cada erro encontrado virou uma correção que
+manteve a intenção original do requisito:
 
-1. **Grupos do Unity Catalog precisam ser de conta, não de workspace.** `databricks groups
-   create` cria grupos de workspace, que o `GRANT` do Unity Catalog não reconhece
-   (`PRINCIPAL_DOES_NOT_EXIST`). Os grupos foram recriados como grupos de conta pela UI.
-2. **`CHECK` constraint não é aceito inline em `CREATE TABLE`.** Movido para
-   `ALTER TABLE ... ADD CONSTRAINT` em `referencia.categorias`.
-3. **`ROW FILTER` não é aceito em `MATERIALIZED VIEW`** neste motor do Lakeflow (erro de
-   sintaxe testado em produção). Mantido apenas `MASK` na MV `gold.dim_clientes`; o filtro por
-   UF foi implementado por fora, na view dinâmica `gold.vw_clientes_regional`
-   (`src/operacao/governanca_validacao.sql`), que reaplica máscara + `governanca.filtro_uf`.
-4. **Funções `MASK` precisam de nome totalmente qualificado** (`${catalogo}.governanca...`)
-   dentro do pipeline — o catálogo padrão de resolução da MV não era o do pipeline.
-5. **`WATERMARK` vem logo após o `FROM STREAM(...)`**, antes do `WHERE` (não depois).
-6. **Streaming não lê de uma tabela que sofre `MERGE`** (`silver.pedidos`, alvo do CDC). A
-   streaming table `gold.pedidos_por_hora` passou a ler de `silver.pedidos_eventos_validos`
-   (streaming table só de append, um evento por linha), preservando o watermark.
-7. **`__START_AT`/`__END_AT` do CDC seguem o tipo da coluna do `SEQUENCE BY`.** Como
-   `clientes` usa `SEQUENCE BY evento_seq` (BIGINT), a coluna correspondente em
-   `gold.dim_clientes` é `vigente_desde_evento_seq BIGINT`, não `TIMESTAMP`.
-8. **`table_changes` e `RESTORE ... TO VERSION AS OF` exigem valor literal**, não subquery.
-   Resolvido calculando a versão em uma célula Python e interpolando o literal na consulta.
-9. **`event_log` não é configurável via `databricks.yml`** nesta versão da CLI (campo
-   desconhecido). Em vez de publicar o event log numa tabela, as consultas usam a função
-   `event_log(TABLE(...))`, que resolve o pipeline dono da tabela automaticamente.
-10. **CREATE CATALOG é permitido nesta Free Edition** — testado antes de decidir a estratégia;
-    não foi necessário usar o catálogo `workspace` como contingência.
+| Problema | Causa | Solução |
+|---|---|---|
+| `PRINCIPAL_DOES_NOT_EXIST` em `GRANT` | Grupos criados pela CLI eram de workspace | Grupos recriados como **grupos de conta** |
+| Erro de sintaxe em `CHECK` | Constraint inline não aceita no `CREATE TABLE` | `ALTER TABLE ... ADD CONSTRAINT` |
+| Erro de sintaxe em `ROW FILTER` | Não suportado em materialized view nesta versão | Filtro por UF numa view (`gold.vw_clientes_regional`) |
+| `UNRESOLVED_ROUTINE` no `MASK` | O catálogo padrão da MV não era o do pipeline | Funções com nome totalmente qualificado |
+| Erro de sintaxe em `WATERMARK` | Cláusula posicionada depois do `WHERE` | Logo após o `FROM STREAM(...)` |
+| `DELTA_SOURCE_TABLE_IGNORE_CHANGES` | Streaming lendo de uma tabela que sofre `MERGE` | Fonte trocada para a streaming table de eventos válidos (só append) |
+| Schema incompatível em `dim_clientes` | `__START_AT` herda o tipo do `SEQUENCE BY` | Coluna `vigente_desde_evento_seq BIGINT` |
+| `table_changes` e `RESTORE` rejeitam subconsulta | Exigem versão literal | Versão calculada em célula Python e interpolada |
+| `event_log` não configurável no bundle | A CLI usada não suporta o campo | Consultas com `event_log(TABLE(...))` |
 
-## Grupos e isolamento de dados
+## Limitações conhecidas
 
-| Grupo               | Acesso                                                          |
-|---------------------|------------------------------------------------------------------|
-| `ecom_engenharia`   | leitura/escrita em bronze, silver, gold + volume de landing      |
-| `ecom_pii_leitores` | leitura de gold (com PII real, sem máscara)                      |
-| `ecom_analistas`    | leitura de gold (com PII mascarada e apenas UFs SP/RJ/MG/GO/DF)  |
+- **Regra de data coerente:** compara `pedido_ts` com `evento_ts`, e o gerador usa o mesmo valor nos dois. Por isso pedidos com data futura (16 de 3.873) passam pela validação. Uma regra contra `current_timestamp()` resolveria.
+- **Quarentena só para pedidos:** clientes inválidos são descartados, não isolados.
+- **Filtro por UF:** como `ROW FILTER` não vale em materialized view, ele existe só na view regional. Os analistas têm `SELECT` em todo o schema `gold`, então um próximo passo seria liberar apenas a view. O filtro também não foi validado com um usuário real de `ecom_analistas`.
+- **Autoscale:** a Free Edition só oferece serverless. A configuração de cluster clássico com autoscale existe em `docs/workflow/` apenas como referência.
+- **Dados sintéticos:** gerados por `src/setup/gerador_dados.py`; os jobs de ingestão e manutenção estão pausados de propósito.
 
-## Links
+## Próximos passos
 
-- Pipeline: `ecommerce_medallion_dlt` — Unity Catalog → Data Engineering → Pipelines
-- Jobs: `ecommerce_lakehouse_setup_e_carga`, `ecommerce_lakehouse_ingestao` (PAUSED),
-  `ecommerce_lakehouse_manutencao` (PAUSED)
-- Evidências completas: [EVIDENCIAS.md](EVIDENCIAS.md)
+- Ambientes `staging` e `prod` com catálogos separados e deploy via CI.
+- Testes automatizados das regras de qualidade e do CDC.
+- Publicar o event log em tabela e criar alertas de qualidade e de atraso.
+- Substituir o gerador por uma fonte real (arquivos de um sistema ou CDC de banco).
